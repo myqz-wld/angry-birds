@@ -6,17 +6,14 @@ import type { Slingshot } from './entities/slingshot.ts'
 import type { Particle } from './particles.ts'
 import type { BirdType } from './entities/bird.ts'
 import type { BlockMaterial } from './entities/block.ts'
+import type { BgElement } from './background.ts'
+import type { FieldChar } from './field.ts'
 
 export const CANVAS_WIDTH = 1200
 export const CANVAS_HEIGHT = 680
 export const GROUND_Y = CANVAS_HEIGHT - 60
 
-// pretext
-let ptPrepare: ((text: string, font: string) => unknown) | null = null
 const wCache = new Map<string, number>()
-import('/@modules/@chenglou/pretext/dist/layout.js' as string).then((m: any) => {
-  ptPrepare = m.prepare
-}).catch(() => {})
 
 const MONO = 'Menlo, Monaco, "Courier New", monospace'
 function mono(s: number) { return `${s}px ${MONO}` }
@@ -27,6 +24,7 @@ const BIRD_ART: Record<BirdType, string[]> = {
   yellow: [' /\\ ', '(>>)', ' \\/ '],
   blue:   ['(.)'],
   black:  [' /==\\ ', '(#><#)', ' \\==/ '],
+  bounce: [' /o\\ ', '(o.o)', ' \\o/ '],
 }
 
 const PIG_ART = {
@@ -58,6 +56,8 @@ export interface RenderState {
   currentBirdType: BirdType | null
   currentBirdAbilityUsed: boolean
   debugMsg: string
+  bgElements: BgElement[]
+  fieldChars: FieldChar[]
 }
 
 export class Renderer {
@@ -73,7 +73,6 @@ export class Renderer {
     const k = `${font}|${text}`
     const c = wCache.get(k)
     if (c !== undefined) return c
-    if (ptPrepare) { try { ptPrepare(text, font) } catch {} }
     this.ctx.font = font
     const w = this.ctx.measureText(text).width
     wCache.set(k, w)
@@ -104,11 +103,12 @@ export class Renderer {
     ctx.fillStyle = '#000'
     ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)
 
-    // 所有前景白色
-    ctx.fillStyle = '#fff'
+    // 所有前景红色系
+    ctx.fillStyle = '#e74c3c'
 
+    this.drawField(ctx, state.fieldChars)
+    this.drawBackground(ctx, state.bgElements)
     this.drawGround(ctx)
-    this.drawDeathMarkers(ctx, state.deathMarkers)
     this.drawSlingshot(ctx, state.slingshot, state.currentBird, state.pullPosition, state.isDragging, state.gameState)
     this.drawTrails(ctx, state.birds)
     this.drawBlocks(ctx, state.blocks)
@@ -116,7 +116,7 @@ export class Renderer {
     this.drawBirds(ctx, state.birds, state.currentBird, state.isDragging, state.gameState)
     // 拖拽中的鸟跟随鼠标
     if (state.gameState === 'dragging' && state.currentBird && state.pullPosition) {
-      ctx.fillStyle = '#fff'
+      ctx.fillStyle = '#e74c3c'
       this.drawBirdAt(ctx, state.currentBird, state.pullPosition)
     }
     this.drawParticles(ctx, state.particles)
@@ -125,19 +125,74 @@ export class Renderer {
     // 调试消息
     if (state.debugMsg) {
       ctx.font = mono(18)
-      ctx.fillStyle = '#fff'
+      ctx.fillStyle = '#e74c3c'
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
       ctx.fillText(state.debugMsg, CANVAS_WIDTH / 2, 50)
     }
   }
 
+  private drawField(ctx: CanvasRenderingContext2D, chars: FieldChar[]): void {
+    if (chars.length === 0) return
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'top'
+    let lastFont = ''
+    for (const fc of chars) {
+      if (!fc.alive) continue
+      const sz = Math.round(fc.baseSz * fc.scale)
+      const weight = fc.bold ? 'bold ' : ''
+      const font = `${weight}${sz}px Georgia, "Times New Roman", serif`
+      if (font !== lastFont) { ctx.font = font; lastFont = font }
+      ctx.globalAlpha = fc.alpha
+      // 远离时暗灰，受力时亮白
+      const bright = Math.min(255, Math.round(80 + fc.alpha * 200))
+      ctx.fillStyle = `rgb(${bright},${bright},${bright})`
+      ctx.fillText(fc.ch, fc.x, fc.y)
+    }
+    ctx.globalAlpha = 1
+  }
+
+  private drawBackground(ctx: CanvasRenderingContext2D, elements: BgElement[]): void {
+    // 先画山丘（最底层）
+    for (const el of elements) {
+      if (el.type !== 'hill') continue
+      ctx.save()
+      ctx.fillStyle = el.color
+      ctx.font = mono(16)
+      ctx.textAlign = 'left'
+      ctx.textBaseline = 'top'
+      const lh = 16 * 1.15
+      for (let i = 0; i < el.art.length; i++) {
+        ctx.fillText(el.art[i], el.x, el.y + i * lh)
+      }
+      ctx.restore()
+    }
+
+    // 再画其他元素
+    for (const el of elements) {
+      if (el.type === 'hill') continue
+      ctx.save()
+      ctx.globalAlpha = el.alpha
+      ctx.fillStyle = el.color
+      const sz = el.type === 'cloud' ? 15
+        : el.type === 'bird_silhouette' ? 13
+        : el.type === 'snowflake' ? 14 : 13
+      ctx.font = mono(sz)
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      const lh = sz * 1.15
+      for (let i = 0; i < el.art.length; i++) {
+        ctx.fillText(el.art[i], el.x, el.y + i * lh)
+      }
+      ctx.restore()
+    }
+  }
+
   private drawGround(ctx: CanvasRenderingContext2D): void {
-    ctx.fillStyle = '#fff'
+    ctx.fillStyle = '#c0392b'
     ctx.font = mono(14)
     ctx.textAlign = 'left'
     ctx.textBaseline = 'top'
-    // 地面线
     let line = ''
     for (let i = 0; i < CANVAS_WIDTH / 8; i++) line += '='
     ctx.fillText(line, 0, GROUND_Y)
@@ -155,12 +210,12 @@ export class Renderer {
   }
 
   private drawSlingshot(ctx: CanvasRenderingContext2D, sling: Slingshot, bird: Bird | null, pull: Vec2 | null, dragging: boolean, gameState: string): void {
-    ctx.fillStyle = '#fff'
+    ctx.fillStyle = '#e74c3c'
     const isAiming = gameState === 'aiming' && dragging && pull
 
     // 橡皮筋（后）— 只在瞄准时
     if (isAiming) {
-      ctx.strokeStyle = '#fff'
+      ctx.strokeStyle = '#e74c3c'
       ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(sling.armLeft.x, sling.armLeft.y)
@@ -177,7 +232,7 @@ export class Renderer {
 
     // 橡皮筋（前）— 只在瞄准时
     if (isAiming) {
-      ctx.strokeStyle = '#fff'
+      ctx.strokeStyle = '#e74c3c'
       ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(sling.armRight.x, sling.armRight.y)
@@ -187,13 +242,22 @@ export class Renderer {
   }
 
   private drawTrails(ctx: CanvasRenderingContext2D, birds: Bird[]): void {
-    ctx.font = mono(8)
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
-    ctx.fillStyle = '#555'
+    const chars = ['.', 'o', '*', '#', '@']
     for (const b of birds) {
-      for (let i = 0; i < b.trail.length; i += 3) {
-        ctx.fillText('.', b.trail[i].x, b.trail[i].y)
+      const len = b.trail.length
+      if (len === 0) continue
+      for (let i = 0; i < len; i++) {
+        const t = i / len // 0→旧  1→新
+        const alpha = 0.05 + t * 0.95
+        const sz = 8 + t * 14
+        ctx.save()
+        ctx.globalAlpha = alpha
+        ctx.fillStyle = '#e74c3c'
+        ctx.font = mono(Math.round(sz))
+        ctx.fillText(chars[i % chars.length], b.trail[i].x, b.trail[i].y)
+        ctx.restore()
       }
     }
   }
@@ -206,7 +270,7 @@ export class Renderer {
       black:  'BLK:bomb',
     }
 
-    ctx.fillStyle = '#fff'
+    ctx.fillStyle = '#e74c3c'
     for (const b of birds) {
       if (!b.alive) continue
       if (b === cur && (gameState === 'aiming' || gameState === 'dragging')) continue
@@ -218,9 +282,9 @@ export class Renderer {
         ctx.font = mono(9)
         ctx.textAlign = 'center'
         ctx.textBaseline = 'bottom'
-        ctx.fillStyle = '#888'
+        ctx.fillStyle = '#a33'
         ctx.fillText(label, b.body.position.x, b.body.position.y - b.body.radius! - 5)
-        ctx.fillStyle = '#fff'
+        ctx.fillStyle = '#e74c3c'
       }
     }
   }
@@ -232,7 +296,7 @@ export class Renderer {
     const sz = Math.max(10, Math.round(r * 2 / maxLen * 2.5))
 
     ctx.save()
-    ctx.fillStyle = '#fff'
+    ctx.fillStyle = '#e74c3c'
     ctx.translate(pos.x, pos.y)
     if (bird.launched) ctx.rotate(bird.body.angle)
     this.asciiArt(ctx, art, sz, 0, 0)
@@ -249,7 +313,7 @@ export class Renderer {
       const hp = pig.hp / pig.maxHp
 
       ctx.save()
-      ctx.fillStyle = '#fff'
+      ctx.fillStyle = '#e74c3c'
       ctx.translate(pig.body.position.x, pig.body.position.y)
       this.asciiArt(ctx, art, sz, 0, 0)
       if (hp < 0.3) {
@@ -271,7 +335,7 @@ export class Renderer {
       const ch = dmg ? BLOCK_FILL_DMG[block.material] : BLOCK_FILL[block.material]
 
       ctx.save()
-      ctx.fillStyle = '#fff'
+      ctx.fillStyle = '#e74c3c'
       ctx.translate(block.body.position.x, block.body.position.y)
       ctx.rotate(block.body.angle)
 
@@ -318,7 +382,7 @@ export class Renderer {
       const p = particles[i]
       ctx.save()
       ctx.globalAlpha = p.alpha
-      ctx.fillStyle = '#fff'
+      ctx.fillStyle = '#e74c3c'
       ctx.translate(p.x, p.y)
       ctx.font = mono(Math.round(p.size * 2))
       ctx.fillText(chars[i % chars.length], 0, 0)
@@ -327,7 +391,7 @@ export class Renderer {
   }
 
   private drawUI(ctx: CanvasRenderingContext2D, state: RenderState): void {
-    ctx.fillStyle = '#fff'
+    ctx.fillStyle = '#e74c3c'
     ctx.font = mono(14)
     ctx.textBaseline = 'top'
 
@@ -366,7 +430,7 @@ export class Renderer {
     ctx.fillStyle = 'rgba(0,0,0,0.8)'
     ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT)
 
-    ctx.fillStyle = '#fff'
+    ctx.fillStyle = '#e74c3c'
     ctx.font = mono(40)
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
@@ -419,7 +483,7 @@ export class Renderer {
       ' / ___ \\| |\\  | |_| |  _ < | |   | |_) | ||  _ <| |_| |___) |',
       '/_/   \\_\\_| \\_|\\____|_| \\_\\|_|   |____/___|_| \\_\\____/|____/ ',
     ]
-    ctx.fillStyle = '#fff'
+    ctx.fillStyle = '#e74c3c'
     this.asciiArt(ctx, titleArt, 11, CANVAS_WIDTH / 2, 120, )
 
     // 关卡按钮
@@ -433,12 +497,12 @@ export class Renderer {
       const name = state.levelNames[i] || `Level ${i + 1}`
 
       // 按钮框
-      ctx.strokeStyle = '#fff'
+      ctx.strokeStyle = '#e74c3c'
       ctx.lineWidth = 1
       ctx.strokeRect(btn.x, btn.y, btn.w, btn.h)
 
       // 按钮文字
-      ctx.fillStyle = '#fff'
+      ctx.fillStyle = '#e74c3c'
       ctx.font = mono(14)
       ctx.fillText(`[ ${i + 1} ]`, btn.x + btn.w / 2, btn.y + 18)
       ctx.font = mono(11)
@@ -447,7 +511,7 @@ export class Renderer {
 
     // 底部提示
     ctx.font = mono(14)
-    ctx.fillStyle = '#888'
+    ctx.fillStyle = '#a33'
     ctx.fillText('Press 1-' + state.totalLevels + ' or click to select level', CANVAS_WIDTH / 2, CANVAS_HEIGHT - 60)
     ctx.fillText('ESC to return to menu during game', CANVAS_WIDTH / 2, CANVAS_HEIGHT - 35)
   }

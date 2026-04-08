@@ -15,11 +15,17 @@ import { InputManager } from './input.ts'
 import type { InputEvent } from './input.ts'
 import { LEVELS } from './levels/levels.ts'
 import type { LevelDef } from './levels/levels.ts'
+import { createLevelBackground, updateBackground } from './background.ts'
+import type { BgElement } from './background.ts'
+import { createField, updateField, explodeField } from './field.ts'
+import type { FieldChar } from './field.ts'
 
 type GameState = 'menu' | 'ready' | 'dragging' | 'aiming' | 'flying' | 'waiting' | 'won' | 'lost'
 
 const SLINGSHOT_X = 180
 const SLINGSHOT_Y = GROUND_Y - 10
+
+const BIRD_TYPES: import('./entities/bird.ts').BirdType[] = ['red', 'yellow', 'blue', 'black', 'black', 'black', 'bounce', 'bounce', 'bounce']
 
 // 碰撞伤害阈值（基于相对速度）
 const DAMAGE_THRESHOLD = 250
@@ -37,6 +43,8 @@ export class Game {
   private birds: Bird[] = []
   private pigs: Pig[] = []
   private blocks: Block[] = []
+  private bgElements: BgElement[] = []
+  private fieldChars: FieldChar[] = []
   private ground!: Body
 
   private currentBird: Bird | null = null
@@ -55,9 +63,7 @@ export class Game {
   // 调试消息
   private debugMsg = ''
   private debugTimer = 0
-
-  // 未使用鸟的加分
-  private readonly UNUSED_BIRD_BONUS = 10000
+  private debugMode = false
 
   constructor(canvas: HTMLCanvasElement) {
     this.physics = new PhysicsWorld()
@@ -78,6 +84,10 @@ export class Game {
 
       this.applyDamage(info.bodyA, damage, info.contactPoint)
       this.applyDamage(info.bodyB, damage, info.contactPoint)
+
+      // 碰撞对力场文字的冲击
+      const impactForce = Math.min(impulse / 5, 400)
+      explodeField(this.fieldChars, info.contactPoint.x, info.contactPoint.y, 150, impactForce)
     })
   }
 
@@ -117,6 +127,9 @@ export class Game {
   }
 
   private applyExplosion(center: Vec2): void {
+    // 力场冲击波
+    explodeField(this.fieldChars, center.x, center.y, 400, 1200)
+
     const affectedBodies = [...this.pigs.filter(p => p.alive).map(p => p.body),
                            ...this.blocks.filter(b => b.alive).map(b => b.body)]
 
@@ -185,6 +198,8 @@ export class Game {
     this.deathMarkers = []
     this.score = 0
     this.gameState = 'ready'
+    this.bgElements = createLevelBackground(index)
+    this.fieldChars = createField()
 
     // 创建地面
     this.ground = createBody({
@@ -222,13 +237,9 @@ export class Game {
     this.physics.addBody(rightWall)
 
     // 创建小鸟
-    for (let i = 0; i < def.birds.length; i++) {
-      const bird = createBird(
-        60 + i * 35,
-        GROUND_Y - 20,
-        def.birds[i]
-      )
-      this.birds.push(bird)
+    // 创建初始鸟（随机类型）
+    for (let i = 0; i < 1; i++) {
+      this.birds.push(this.spawnRandomBird(i))
     }
 
     // 创建猪
@@ -248,23 +259,31 @@ export class Game {
     this.prepareBird()
   }
 
+  private spawnRandomBird(slot: number): Bird {
+    const type = BIRD_TYPES[Math.floor(Math.random() * BIRD_TYPES.length)]
+    return createBird(60 + slot * 35, GROUND_Y - 20, type)
+  }
+
   private prepareBird(): void {
     // 找到下一只未发射的鸟
-    const next = this.birds.find(b => b.alive && !b.launched)
-    if (next) {
-      this.currentBird = next
-      this.currentBird.body.velocity = Vec2.zero()
-      this.gameState = 'ready'
-    } else {
-      this.currentBird = null
-      this.checkGameEnd()
+    let next = this.birds.find(b => b.alive && !b.launched)
+    if (!next) {
+      // 无限模式：自动补充一只随机鸟
+      const slot = this.birds.filter(b => b.alive && !b.launched).length
+      next = this.spawnRandomBird(slot)
+      this.birds.push(next)
     }
+    this.currentBird = next
+    this.currentBird.body.velocity = Vec2.zero()
+    this.gameState = 'ready'
   }
 
   private launchBird(): void {
     if (!this.currentBird || !this.pullPosition) return
 
-    const velocity = calculateLaunchVelocity(this.slingshot, this.pullPosition)
+    let velocity = calculateLaunchVelocity(this.slingshot, this.pullPosition)
+    // 弹弹鸟速度加倍
+    if (this.currentBird.type === 'bounce') velocity = velocity.scale(1.5)
     this.currentBird.body.velocity = velocity
     this.currentBird.launched = true
     this.physics.addBody(this.currentBird.body)
@@ -352,9 +371,10 @@ export class Game {
             // 从弹弓释放 → 发射
             this.launchBird()
           } else if (this.gameState === 'dragging' && this.currentBird) {
-            // 没到弹弓就松手 → 鸟回到原位
-            const idx = this.birds.indexOf(this.currentBird)
-            this.currentBird.body.position = new Vec2(60 + idx * 35, GROUND_Y - 20)
+            // 没到弹弓就松手 → 鸟回到待发射队列位置
+            const waitingBirds = this.birds.filter(b => b.alive && !b.launched)
+            const slot = waitingBirds.indexOf(this.currentBird)
+            this.currentBird.body.position = new Vec2(60 + Math.max(0, slot) * 35, GROUND_Y - 20)
             this.gameState = 'ready'
           }
           this.isDragging = false
@@ -429,6 +449,11 @@ export class Game {
       case 'Escape':
         this.gameState = 'menu'
         break
+
+      case 'd':
+      case 'D':
+        this.debugMode = !this.debugMode
+        break
     }
   }
 
@@ -455,20 +480,16 @@ export class Game {
 
   private checkGameEnd(): void {
     const pigsAlive = this.pigs.filter(p => p.alive).length
-    const birdsLeft = this.birds.filter(b => b.alive && !b.launched).length
 
     if (pigsAlive === 0) {
       this.gameState = 'won'
-      this.score += birdsLeft * this.UNUSED_BIRD_BONUS
-
+      // 无限模式：不计未用鸟加分
       const levelDef = LEVELS[this.level % LEVELS.length]
       if (this.score >= levelDef.threeStarScore) this.stars = 3
       else if (this.score >= levelDef.twoStarScore) this.stars = 2
       else this.stars = 1
-    } else if (birdsLeft === 0 &&
-      (this.gameState === 'waiting' || this.gameState === 'ready')) {
-      this.gameState = 'lost'
     }
+    // 无限鸟，不再因鸟用完而 game over
   }
 
   update(dt: number): void {
@@ -481,7 +502,27 @@ export class Game {
 
     // 物理始终运行
     this.physics.update(dt)
+
+    // 弹弹鸟抵消部分重力（只受 30% 重力）
+    for (const bird of this.birds) {
+      if (bird.alive && bird.launched && bird.type === 'bounce') {
+        bird.body.velocity.y -= 800 * 0.7 * dt
+      }
+    }
+
     this.particles.update(dt)
+    updateBackground(this.bgElements, dt)
+    // 力场更新：包含拖拽中的鸟（给文字一点微弱反馈）
+    const fieldBodies = [...this.physics.bodies]
+    if (this.gameState === 'dragging' && this.currentBird && this.pullPosition) {
+      fieldBodies.push({
+        ...this.currentBird.body,
+        position: this.pullPosition,
+        velocity: new Vec2(30, 30), // 模拟微弱运动
+        isStatic: false,
+      })
+    }
+    updateField(this.fieldChars, fieldBodies, dt)
     this.cleanupOutOfBounds()
 
     // 飞行中：更新轨迹、检查鸟是否停止
@@ -506,14 +547,14 @@ export class Game {
         this.onBirdDone()
       }
       // 速度很低 → 短等后结束
-      else if (this.currentBird.body.velocity.length() < 15 && this.currentBird.launched) {
+      else if (this.currentBird.body.velocity.length() < 30 && this.currentBird.launched) {
         this.waitTimer += dt
-        if (this.waitTimer > 1) {
+        if (this.waitTimer > 0.3) {
           this.onBirdDone()
         }
       }
-      // 飞太久 → 强制结束
-      else if (this.flyTimer > 5) {
+      // 飞太久 → 强制结束（弹弹鸟给更长时间）
+      else if (this.flyTimer > (this.currentBird.type === 'bounce' ? 12 : 5)) {
         this.onBirdDone()
       }
       else {
@@ -534,6 +575,7 @@ export class Game {
           }
         }
         if (allStable || this.waitTimer > 3) {
+          this.cleanupLaunchedBirds()
           this.waitTimer = 0
           this.checkGameEnd()
           if (this.gameState === 'waiting') {
@@ -545,8 +587,23 @@ export class Game {
   }
 
   private onBirdDone(): void {
+    // 清除拖尾，但不立即移除鸟
+    if (this.currentBird) {
+      this.currentBird.trail = []
+    }
     this.waitTimer = 0
     this.gameState = 'waiting'
+  }
+
+  // 清理所有已发射且停止的鸟（包括分裂鸟）
+  private cleanupLaunchedBirds(): void {
+    for (const bird of this.birds) {
+      if (bird.alive && bird.launched) {
+        bird.alive = false
+        bird.trail = []
+        this.physics.removeBody(bird.body)
+      }
+    }
   }
 
   private cleanupOutOfBounds(): void {
@@ -591,7 +648,9 @@ export class Game {
       levelNames: LEVELS.map(l => l.name),
       currentBirdType: this.currentBird?.type ?? null,
       currentBirdAbilityUsed: this.currentBird?.abilityUsed ?? false,
-      debugMsg: this.debugTimer > 0 ? this.debugMsg : '',
+      debugMsg: this.debugMode && this.debugTimer > 0 ? this.debugMsg : '',
+      bgElements: this.bgElements,
+      fieldChars: this.fieldChars,
     }
     this.renderer.render(state)
   }
@@ -611,5 +670,10 @@ export class Game {
     }
 
     requestAnimationFrame(loop)
+  }
+
+  // 更新力场论文文本
+  setFieldText(text: string): void {
+    this.fieldChars = createField(text)
   }
 }

@@ -302,7 +302,9 @@ function resolveCollision(info: CollisionInfo): number {
     + rACrossN * rACrossN * bodyA.inverseInertia
     + rBCrossN * rBCrossN * bodyB.inverseInertia
 
-  const e = Math.min(bodyA.restitution, bodyB.restitution)
+  // 高弹性物体用 max 确保弹性不被低弹性方吃掉
+  const maxR = Math.max(bodyA.restitution, bodyB.restitution)
+  const e = maxR >= 0.8 ? maxR : Math.min(bodyA.restitution, bodyB.restitution)
   const rawJ = -(1 + e) * velAlongNormal / effectiveMass
 
   // === 根治：限制最大冲量，防止单次碰撞产生灾难性力 ===

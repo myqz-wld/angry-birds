@@ -10,11 +10,43 @@ const server = Bun.serve({
       })
     }
 
+    // arXiv 代理 API — 绕过 CORS
+    if (path === '/api/arxiv') {
+      const id = url.searchParams.get('id')
+      if (!id) return new Response(JSON.stringify({ error: 'missing id' }), { status: 400 })
+      try {
+        const res = await fetch(`https://arxiv.org/abs/${id}`)
+        const html = await res.text()
+        // 提取 abstract
+        const match = html.match(/<blockquote class="abstract[^"]*">\s*<span class="descriptor">[^<]*<\/span>\s*([\s\S]*?)<\/blockquote>/)
+        const abstract = match ? match[1].replace(/<[^>]*>/g, '').trim() : ''
+        // 提取标题
+        const titleMatch = html.match(/<h1 class="title[^"]*">\s*<span class="descriptor">[^<]*<\/span>\s*([\s\S]*?)<\/h1>/)
+        const title = titleMatch ? titleMatch[1].replace(/<[^>]*>/g, '').trim() : ''
+        return new Response(JSON.stringify({ title, abstract }), {
+          headers: { 'Content-Type': 'application/json' },
+        })
+      } catch (e) {
+        return new Response(JSON.stringify({ error: String(e) }), { status: 500 })
+      }
+    }
+
     // 处理 /@modules/ 路径 (bare module 导入映射)
     if (path.startsWith('/@modules/')) {
       const modulePath = path.replace('/@modules/', 'node_modules/')
       const file = Bun.file(modulePath)
       if (await file.exists()) {
+        // 转译 TS 模块（如 pretext 源码）
+        if (modulePath.endsWith('.ts')) {
+          const transpiler = new Bun.Transpiler({ loader: 'ts' })
+          const code = await file.text()
+          let js = transpiler.transformSync(code)
+          // pretext 内部 import 用 .js 后缀，但实际是 .ts
+          js = js.replace(/from\s+["'](\.\/[^"']+)\.js["']/g, 'from "$1.ts"')
+          return new Response(js, {
+            headers: { 'Content-Type': 'application/javascript' },
+          })
+        }
         return new Response(file, {
           headers: { 'Content-Type': 'application/javascript' },
         })

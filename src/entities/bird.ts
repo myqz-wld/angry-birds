@@ -1,7 +1,7 @@
 import { Vec2, createBody } from '../physics.ts'
 import type { Body } from '../physics.ts'
 
-export type BirdType = 'red' | 'yellow' | 'blue' | 'black'
+export type BirdType = 'red' | 'yellow' | 'blue' | 'black' | 'bounce'
 
 export interface Bird {
   body: Body
@@ -20,6 +20,7 @@ const BIRD_CONFIG: Record<BirdType, { radius: number; mass: number; color: strin
   yellow: { radius: 15, mass: 3,  color: '#f1c40f', hp: 80 },
   blue:   { radius: 12, mass: 2,  color: '#3498db', hp: 60 },
   black:  { radius: 22, mass: 8,  color: '#2c3e50', hp: 150 },
+  bounce: { radius: 14, mass: 2,  color: '#e67e22', hp: 200 },
 }
 
 export function createBird(x: number, y: number, type: BirdType): Bird {
@@ -31,8 +32,8 @@ export function createBird(x: number, y: number, type: BirdType): Bird {
       radius: config.radius,
       mass: config.mass,
       shape: 'circle',
-      restitution: 0.4,
-      friction: 0.3,
+      restitution: type === 'bounce' ? 0.9 : 0.4,
+      friction: type === 'bounce' ? 0.1 : 0.3,
     }),
     type,
     launched: false,

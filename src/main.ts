@@ -31,6 +31,45 @@ try {
   const game = new Game(canvas)
   game.start()
   console.log('Game started successfully')
+
+  // arXiv 论文加载
+  const arxivInput = document.getElementById('arxiv-input') as HTMLInputElement | null
+  const arxivBtn = document.getElementById('arxiv-btn') as HTMLButtonElement | null
+  const arxivStatus = document.getElementById('arxiv-status') as HTMLSpanElement | null
+
+  if (arxivBtn && arxivInput && arxivStatus) {
+    const loadPaper = async () => {
+      let id = arxivInput.value.trim()
+      if (!id) return
+      // 支持粘贴完整 URL
+      const urlMatch = id.match(/arxiv\.org\/abs\/([^\s?#]+)/)
+      if (urlMatch) id = urlMatch[1]
+
+      arxivStatus.textContent = 'Loading...'
+      arxivBtn.disabled = true
+      try {
+        const res = await fetch(`/api/arxiv?id=${encodeURIComponent(id)}`)
+        const data = await res.json()
+        if (data.error) {
+          arxivStatus.textContent = `Error: ${data.error}`
+        } else if (data.abstract) {
+          const text = (data.title ? data.title + '. ' : '') + data.abstract
+          game.setFieldText(text)
+          arxivStatus.textContent = data.title || id
+        } else {
+          arxivStatus.textContent = 'No abstract found'
+        }
+      } catch (e) {
+        arxivStatus.textContent = `Fetch failed: ${e}`
+      }
+      arxivBtn.disabled = false
+    }
+
+    arxivBtn.addEventListener('click', loadPaper)
+    arxivInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') loadPaper()
+    })
+  }
 } catch (e) {
   console.error('Failed to start game:', e)
   const ctx = canvas.getContext('2d')!
