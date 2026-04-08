@@ -1,0 +1,16 @@
+{
+  "name": "angry-birds",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "bun --hot serve.ts",
+    "build": "bun build src/main.ts --outdir dist --minify"
+  },
+  "dependencies": {
+    "@chenglou/pretext": "github:chenglou/pretext"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/bun": "latest"
+  }
+}
